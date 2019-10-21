@@ -63,6 +63,7 @@ job popJob (jobQueue **head) {
 }
 
 jobQueue *jobQueueHead = NULL;
+pthread_mutex_t mutex;
 
 void createJob(void (*callback)(dwellType *, unsigned int const, unsigned int const, unsigned int const),
 			   dwellType *buffer,
@@ -76,15 +77,15 @@ void createJob(void (*callback)(dwellType *, unsigned int const, unsigned int co
 
 void *worker(void *id) {
 	(void) id;
-	// This could be your pthread function
+	while (jobQueueHead != NULL) {
+        pthread_mutex_lock(&mutex);
+	    job j = popJob(&jobQueueHead);
+        pthread_mutex_unlock(&mutex);
+	    j.callback(j.dwellBuffer, j.atY, j.atX, j.blockSize);
+	}
+
 	return NULL;
 }
-
-void initializeWorkers(unsigned int threadsNumber) {
-	(void) threadsNumber;
-	// This could be you initializer function to do all the pthread related stuff.
-}
-
 
 /*
    Now the 2 two functions are following which do the computation
@@ -97,39 +98,39 @@ unsigned int blockDim;
 unsigned int subdivisions;
 
 void marianiSilver( dwellType *buffer,
-					unsigned int const atY,
-					unsigned int const atX,
-					unsigned int const blockSize)
+                    unsigned int const atY,
+                    unsigned int const atX,
+                    unsigned int const blockSize)
 {
-	dwellType dwell = commonBorder(buffer, atY, atX, blockSize);
-	if ( dwell != dwellUncomputed ) {
-		fillBlock(buffer, dwell, atY, atX, blockSize);
-		if (markBorders)
-			markBorder(buffer, dwellBorderFill, atY, atX, blockSize);
-	} else if (blockSize <= blockDim) {
-		computeBlock(buffer, atY, atX, blockSize);
-		if (markBorders)
-			markBorder(buffer, dwellBorderCompute, atY, atX, blockSize);
-	} else {
-		// Subdivision
-		unsigned int newBlockSize = blockSize / subdivisions;
-		for (unsigned int ydiv = 0; ydiv < subdivisions; ydiv++) {
-			for (unsigned int xdiv = 0; xdiv < subdivisions; xdiv++) {
-				marianiSilver(buffer, atY + (ydiv * newBlockSize), atX + (xdiv * newBlockSize), newBlockSize);
-			}
-		}
-	}
+    dwellType dwell = commonBorder(buffer, atY, atX, blockSize);
+    if ( dwell != dwellUncomputed ) {
+        fillBlock(buffer, dwell, atY, atX, blockSize);
+        if (markBorders)
+            markBorder(buffer, dwellBorderFill, atY, atX, blockSize);
+    } else if (blockSize <= blockDim) {
+        computeBlock(buffer, atY, atX, blockSize);
+        if (markBorders)
+            markBorder(buffer, dwellBorderCompute, atY, atX, blockSize);
+    } else {
+        // Subdivision
+        unsigned int newBlockSize = blockSize / subdivisions;
+        for (unsigned int ydiv = 0; ydiv < subdivisions; ydiv++) {
+            for (unsigned int xdiv = 0; xdiv < subdivisions; xdiv++) {
+                marianiSilver(buffer, atY + (ydiv * newBlockSize), atX + (xdiv * newBlockSize), newBlockSize);
+            }
+        }
+    }
 }
 
 
 void escapeTime( dwellType *buffer,
-				 unsigned int const atY,
-				 unsigned int const atX,
-				 unsigned int const blockSize)
+                 unsigned int const atY,
+                 unsigned int const atX,
+                 unsigned int const blockSize)
 {
-	computeBlock(buffer, atY, atX, blockSize);
-	if (markBorders)
-		markBorder(buffer, dwellBorderCompute, atY, atX, blockSize);
+    computeBlock(buffer, atY, atX, blockSize);
+    if (markBorders)
+        markBorder(buffer, dwellBorderCompute, atY, atX, blockSize);
 }
 
 void help(char const *exec, char const opt, char const *optarg) {
@@ -288,6 +289,7 @@ int main( int argc, char *argv[] )
 		dwellBuffer[i] = dwellUncomputed;
 	}
 
+
 	if (useMarianiSilver) {
 		// Scale the blockSize from res up to a subdividable value
 		// Number of possible subdivisions:
@@ -302,11 +304,31 @@ int main( int argc, char *argv[] )
 		// a divideable dimension
 		unsigned int block = ceil((double) resolution / useThreads);
 
+        for (unsigned int y = 0; y < useThreads; y++) {
+            for (unsigned int x = 0; x < useThreads; x++) {
+                job newJob;
+                newJob.callback = escapeTime;
+                newJob.dwellBuffer = dwellBuffer;
+                newJob.atY = y * block;
+                newJob.atX = x * block;
+                newJob.blockSize = block;
+                putJob(&jobQueueHead, newJob);
+            }
+        }
+
+		pthread_mutex_init(&mutex, NULL);
+		pthread_t* threads = malloc(useThreads * sizeof(pthread_t));
+
 		for (unsigned int t = 0; t < useThreads; t++) {
-			for (unsigned int x = 0; x < useThreads; x++) {
-				escapeTime(dwellBuffer, t * block, x * block, block);
-			}
+		    pthread_create(&threads[t], NULL, worker, (void*) t);
 		}
+
+        for (unsigned int t = 0; t < useThreads; t++) {
+            pthread_join(threads[t], NULL);
+        }
+
+		free(threads);
+		pthread_mutex_destroy(&mutex);
 	}
 
 	// Map dwell buffer to image
